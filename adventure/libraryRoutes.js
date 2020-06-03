@@ -130,11 +130,9 @@ server.get("/search-help", function (req, res) {
 });
 
 server.get("/search", function (req, res) {
-    // TODO: Fold all this back into the main library display route so users can trivially move from displaying a whole category or tag to a more specific search
+    // TODO: Fold all this back into the main library display route so users can trivially move from displaying a whole category or tag to a more specific search; most of it's equivalent functionality anyway, we just need a flag to hide the search details field in the template (and the release details if/when that's implemented) - however, if the user clicks a link like "Advanced Search", their current view will be transformed into a search query
 
     var page = req.query.page || 1;
-    var category = "%"; // % for everything
-    const productPlatforms = "(SELECT GROUP_CONCAT(DISTINCT Platform) FROM Releases WHERE ProductUUID = Products.ProductUUID)";
 
     // Is there a search term?
     if (req.query.q) {
@@ -203,52 +201,41 @@ server.get("/search", function (req, res) {
         endYear = Number(req.query.endYear);
     }
 
-    // TODO: Replace old tag/platform query syntax with new approach, and probably move them and the year specifiers (even though they're very well sanitized) into parameters to the database exec command
-    var tag = null;
-    var platform = null;
-    // TODO: Support richer tag queries than the bare-minimum compat we have
-    // with old site (because library pages link to tags in descriptions)
-    if (req.params.tag != null) {
-        if (req.params.tag.indexOf("tag-") == 0) {
-            tag = config.constants.tagMappings[req.params.tag] || null;
-        } else if (req.params.tag.indexOf("platform-") == 0) {
-            platform = config.constants.platformMappings[req.params.tag] || null;
-        }
-    }
-
-    // Matching logic for the subquery that checks for releases that fit the desired criteria
-    // TODO: Technically tagQuery doesn't belong here since it's in Products, but it's harmless here
-    var releaseQuery = "AND Products.ProductUUID IN (\
-        SELECT ProductUUID FROM Releases \
-        WHERE \
-        Releases.ProductUUID = Products.ProductUUID \
-        AND year(Releases.ReleaseDate) > '" + startYear + "' \
-        AND year(Releases.ReleaseDate) < '" + endYear + "' \
-        AND ("+ platformQuery +") \
-        AND ("+ tagQuery +") \
-    )";
 
     // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
     // TODO: Once column sorting is implemented, will need to add ORDER BY clause
-    var coreQuery = "MATCH(Products.Name) AGAINST (? IN BOOLEAN MODE) && \
-    Products.Type LIKE ? && \
-    IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && \
-    IF(? LIKE '%', 'Platform' LIKE CONCAT(\"%\", ?, \"%\"), TRUE)";
+    var coreQuery = "MATCH(Products.Name, Products.Notes) AGAINST (? IN BOOLEAN MODE) \n\
+        AND Products.ProductUUID IN (\n\
+            SELECT ProductUUID FROM Releases \n\
+            WHERE \n\
+            Releases.ProductUUID = Products.ProductUUID \n\
+            AND year(Releases.ReleaseDate) > '" + startYear + "' \n\
+            AND year(Releases.ReleaseDate) < '" + endYear + "' \n\
+            AND ("+ platformQuery + ")\n\
+        ) \n\
+        AND ("+ tagQuery +")";
+
+    console.log(coreQuery.split('\n'));
 
     // HACK: I am EXTREMELY not proud of ANY of these queries
     // they need UDFs and building on demand BADLY
 
     // First get count of matching columns so we can paginate
-    database.execute("SELECT COUNT(*), " + productPlatforms + " AS Platform FROM `Products` WHERE " + coreQuery + releaseQuery,
-        [search, category, tag, tag, platform, platform], function (cErr, cRes, cFields) {
+    database.execute("SELECT COUNT(*) FROM `Products` WHERE " + coreQuery,
+        [search], function (cErr, cRes, cFields) {
+            if (!cRes) {
+                return res.status(404).render("error", {
+                    message: "Search engine error."
+                });
+            }
         var count = cRes[0]["COUNT(*)"];
         var pages = Math.ceil(count / config.perPage);
         // TODO: Display "no results" if there's no results
 
         // TODO: Break up these queries, BADLY
         // Now do the actual content query, limiting to the extents of the currently selected page
-            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`," + productPlatforms + " AS Platform FROM `Products` HAVING " + coreQuery + releaseQuery + " LIMIT ?,?",
-            [search, category, tag, tag, platform, platform, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
+            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID` From `Products` HAVING " + coreQuery + " LIMIT ?,?",
+            [search, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
             // truncate and markdown
             var productsFormatted = prRes.map(function (x) {
                 x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes));

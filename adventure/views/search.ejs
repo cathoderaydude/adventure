@@ -65,6 +65,7 @@ form.search select {
 </form>
 <br>
 
+<% if (products.length > 1) { %>
 <dl id="searchList">
     <% products.forEach(function(i, n, a) {%>
         <dt>
@@ -127,31 +128,8 @@ form.search select {
         <% } %>
     </ul>
     <% } %>
-
-    <!-- why does the button group get taller if we make this a formal group?-->
-    <div class="">
-        <% if (category == 'applications') { %>
-        <div id="tagDropdown" class="dropup btn-group">
-            <button class="btn btn-secondary dropdown-toggle" type="button" id="tagDropdownButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                Tags...
-            </button>
-            <div class="dropdown-menu" aria-labelledby="tagDropdownButton">
-                <% for (var i in tagMappingsInverted) { %>
-                <a class="dropdown-item" href="/search/<%= category %>/<%= tagMappingsInverted[i] %>"><%= i %></a>
-                <% } %>
-            </div>
-        </div>
-        <% } %>
-        <div id="platformDropdown" class="dropup btn-group">
-            <button class="btn btn-info dropdown-toggle" type="button" id="platformDropdownButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                Platforms...
-            </button>
-            <div class="dropdown-menu" aria-labelledby="platformDropdownButton">
-                <% for (var i in platformMappingsInverted) { %>
-                <a class="dropdown-item" href="/search/<%= category %>/<%= platformMappingsInverted[i] %>"><%= i %></a>
-                <% }     %>
-            </div>
-        </div>
-    </div>
 </nav>
+<% } else { %>
+	<h2>There were no search results.</h2>
+<% } %>
 <%- include("foot") %>
