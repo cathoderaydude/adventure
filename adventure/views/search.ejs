@@ -18,7 +18,7 @@ form.search select {
 	</div>
 	<div class="form-row">
 		<div class="col-md-2 form-inline">
-			<label>Text:</label> &nbsp;
+			<label>Title:</label> &nbsp;
 		</div>
 		<div class="col-md-3 form-inline">
 			<input type="text" class="form-control" name="q" placeholder="Search text" value="<%= search %>">
@@ -30,14 +30,17 @@ form.search select {
 			<input type="text" class="form-control" name="startYear" size="4" value="<%= startYear %>" placeholder="From">&nbsp;-&nbsp;
 			<input type="text" class="form-control" name="endYear" size="4" value="<%= endYear %>" placeholder="To">
 		</div>
-		<div class="col-md-2 text-right">
-			<button type="submit" class="btn btn-primary">Search</button>
-		</div>
 	</div>
 	<div class="row" style="margin-top: 10px;">
-		<div class="col-md-2"></div>
+		<div class="col-md-2"><label for="descField">Search description: </label> </div>
 		<div class="col-md-3">
-			<label for="descField">Search Descriptions: </label> <input name="descField" type="checkbox">
+			<input name="descField" type="checkbox" <% if (descField) { %> checked <% } %> >
+		</div>
+		<div class="col-md-2 form-inline">
+			<label>Vendor:</label> &nbsp;
+		</div>
+		<div class="col-md-3 form-inline">
+			<input type="text" class="form-control" name="vendor" placeholder="Vendor name" value="<%= vendor %>">
 		</div>
 	</div>
 	<div class="row">
@@ -60,6 +63,9 @@ form.search select {
 					<option if <% if (tagSet.indexOf(j) > -1) { %> selected=true <% } %> ><%= j %></option>
                 <% }) %>
 			</select>
+		</div>
+		<div class="col-md-2 text-right">
+			<button type="submit" class="btn btn-primary">Search</button>
 		</div>
 	</div>
 </form>

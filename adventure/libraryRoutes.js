@@ -142,7 +142,7 @@ server.get("/search", function (req, res) {
         // Blank searches are allowed so user can e.g. find all items by year
         // TODO: Throw an error if NO fields were populated
         var searchTerm = "";
-        var search = "";
+        var search = "%";
     }
 
     var tagQuery = "";
@@ -201,17 +201,28 @@ server.get("/search", function (req, res) {
         endYear = Number(req.query.endYear);
     }
 
+    var descField = (req.query.descField) ? true : false;
+    var vendor = (req.query.vendor) ? req.query.vendor : "%";
+
+    // Assemble the list of fields to be matched with fulltext search
+    ftsMatchFields = ["Products.Name"];
+    if (descField) ftsMatchFields.push("Products.Notes");
+    matchFields = ftsMatchFields.join(", ");
+
+    var ftsEnabled = "";
+    if (searchTerm == "") ftsEnabled = "OR TRUE";
 
     // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
     // TODO: Once column sorting is implemented, will need to add ORDER BY clause
-    var coreQuery = "MATCH(Products.Name, Products.Notes) AGAINST (? IN BOOLEAN MODE) \n\
+    var coreQuery = "(MATCH(" + matchFields +") AGAINST (? IN BOOLEAN MODE) "+ftsEnabled+") \n\
         AND Products.ProductUUID IN (\n\
             SELECT ProductUUID FROM Releases \n\
             WHERE \n\
             Releases.ProductUUID = Products.ProductUUID \n\
-            AND year(Releases.ReleaseDate) > '" + startYear + "' \n\
-            AND year(Releases.ReleaseDate) < '" + endYear + "' \n\
+            AND year(Releases.ReleaseDate) >= '" + startYear + "' \n\
+            AND year(Releases.ReleaseDate) <= '" + endYear + "' \n\
             AND ("+ platformQuery + ")\n\
+            AND Releases.VendorName LIKE ?\n\
         ) \n\
         AND ("+ tagQuery +")";
 
@@ -222,7 +233,7 @@ server.get("/search", function (req, res) {
 
     // First get count of matching columns so we can paginate
     database.execute("SELECT COUNT(*) FROM `Products` WHERE " + coreQuery,
-        [search], function (cErr, cRes, cFields) {
+        [search, vendor], function (cErr, cRes, cFields) {
             if (!cRes) {
                 return res.status(404).render("error", {
                     message: "Search engine error."
@@ -235,19 +246,24 @@ server.get("/search", function (req, res) {
         // TODO: Break up these queries, BADLY
         // Now do the actual content query, limiting to the extents of the currently selected page
             database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID` From `Products` HAVING " + coreQuery + " LIMIT ?,?",
-            [search, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
-            // truncate and markdown
-            var productsFormatted = prRes.map(function (x) {
-                x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes));
-                return x;
-            })
+                [search, vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
+                    var renderer = new marked.Renderer();
+                    renderer.link = function (href, title, text) {
+                        return "<strong>"+text+"</strong>";
+                    };
+                // truncate and markdown
+                var productsFormatted = prRes.map(function (x) {
+                    x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes), { renderer: renderer });
+                    return x;
+                })
 
-            /* TODO: Right now search correctly filters on releases, but does not show those releases in the search
-            *  results. Template should be updated to link to each matching release under its corresponding product
-            *  and in order to do that we have to run a subquery for every row returned from the last query that will
-            *  retrieve the release information (version, year) and link there
-            */
+                /* TODO: Right now search correctly filters on releases, but does not show those releases in the search
+                *  results. Template should be updated to link to each matching release under its corresponding product
+                *  and in order to do that we have to run a subquery for every row returned from the last query that will
+                *  retrieve the release information (version, year) and link there
+                */
 
+                
 
             // TODO: Special-case OS for rendering the old custom layout
             res.render("search", {
@@ -268,7 +284,9 @@ server.get("/search", function (req, res) {
                 startYear: startYear > 0000 ? startYear : "",
                 endYear: endYear < 9999 ? endYear : "",
                 tagSet: tagSet,
-                platformSet, platformSet
+                platformSet, platformSet,
+                vendor: (vendor == "%") ? "" : vendor,
+                descField: descField
             });
         });
     });
