@@ -124,14 +124,10 @@ server.get("/library", function (req, res) {
     return res.redirect("/library/" + config.defaultCategory);
 });
 
-// TODO: non-CSE search
-//server.get("/search", libraryRoute);
-/*server.get("/search", function (req, res) {
-    return res.render("searchCSE", {
-        q: req.query.q,
-        cx: config.cseId
+server.get("/search-help", function (req, res) {
+    return res.render("searchHelp", {
     });
-});*/
+});
 
 server.get("/search", function (req, res) {
     // TODO: Fold all this back into the main library display route so users can trivially move from displaying a whole category or tag to a more specific search
@@ -152,6 +148,7 @@ server.get("/search", function (req, res) {
     }
 
     var tagQuery = "";
+    var tagSet = [];
     // Are there any tags?
     if (req.query.tags) {
         // Convert input query to array if needed
@@ -165,6 +162,7 @@ server.get("/search", function (req, res) {
             // Make sure each platform is valid to prevent SQL injection
             if (formatting.invertObject(config.constants.tagMappings).hasOwnProperty(tag)) {
                 tagQueries.push("find_in_set('" + tag + "', Products.ApplicationTags)");
+                tagSet.push(tag);
             }
         });
         tagQuery = tagQueries.join(" OR ");
@@ -172,6 +170,7 @@ server.get("/search", function (req, res) {
     if (tagQuery == "") tagQuery = "TRUE";
 
     var platformQuery = "";
+    var platformSet = [];
     // Are there any platforms?
     if (req.query.platforms) {
         // Convert input query to array if needed
@@ -180,13 +179,13 @@ server.get("/search", function (req, res) {
         } else {
             var platforms = [req.query.platforms]; // User selected one item
         }
-        var platforms = req.query.platforms; // Split platforms from search query
         var platformQueries = [];
         platforms.forEach(platform => {
             // Make sure each platform is valid to prevent SQL injection
             console.log("platform: " + platform);
             if (formatting.invertObject(config.constants.platformMappings).hasOwnProperty(platform)) {
-                platformQueries.push("find_in_set('" + platform +"', Releases.Platform)");
+                platformQueries.push("find_in_set('" + platform + "', Releases.Platform)");
+                platformSet.push(platform);
             }
         });
         platformQuery = platformQueries.join(" OR ");
@@ -204,6 +203,7 @@ server.get("/search", function (req, res) {
         endYear = Number(req.query.endYear);
     }
 
+    // TODO: Replace old tag/platform query syntax with new approach, and probably move them and the year specifiers (even though they're very well sanitized) into parameters to the database exec command
     var tag = null;
     var platform = null;
     // TODO: Support richer tag queries than the bare-minimum compat we have
@@ -215,14 +215,6 @@ server.get("/search", function (req, res) {
             platform = config.constants.platformMappings[req.params.tag] || null;
         }
     }
-
-
-    // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
-    // TODO: Once column sorting is implemented, will need to add ORDER BY clause
-    var coreQuery = "MATCH(Products.Name) AGAINST (? IN BOOLEAN MODE) && \
-    Products.Type LIKE ? && \
-    IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && \
-    IF(? LIKE '%', 'Platform' LIKE CONCAT(\"%\", ?, \"%\"), TRUE)";
 
     // Matching logic for the subquery that checks for releases that fit the desired criteria
     // TODO: Technically tagQuery doesn't belong here since it's in Products, but it's harmless here
@@ -236,6 +228,13 @@ server.get("/search", function (req, res) {
         AND ("+ tagQuery +") \
     )";
 
+    // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
+    // TODO: Once column sorting is implemented, will need to add ORDER BY clause
+    var coreQuery = "MATCH(Products.Name) AGAINST (? IN BOOLEAN MODE) && \
+    Products.Type LIKE ? && \
+    IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && \
+    IF(? LIKE '%', 'Platform' LIKE CONCAT(\"%\", ?, \"%\"), TRUE)";
+
     // HACK: I am EXTREMELY not proud of ANY of these queries
     // they need UDFs and building on demand BADLY
 
@@ -244,6 +243,8 @@ server.get("/search", function (req, res) {
         [search, category, tag, tag, platform, platform], function (cErr, cRes, cFields) {
         var count = cRes[0]["COUNT(*)"];
         var pages = Math.ceil(count / config.perPage);
+        // TODO: Display "no results" if there's no results
+
         // TODO: Break up these queries, BADLY
         // Now do the actual content query, limiting to the extents of the currently selected page
             database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`," + productPlatforms + " AS Platform FROM `Products` HAVING " + coreQuery + releaseQuery + " LIMIT ?,?",
@@ -271,9 +272,16 @@ server.get("/search", function (req, res) {
                 tag: req.params.tag,
                 tags: tags,
                 tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
+                tags: Object.values(config.constants.tagMappings),
+                platformMappings: config.constants.platformMappings,
                 platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
+                platforms: Object.values(config.constants.platformMappings),
                 categoryMappings: config.constants.categoryMappings,
-                categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings)
+                categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
+                startYear: startYear > 0000 ? startYear : "",
+                endYear: endYear < 9999 ? endYear : "",
+                tagSet: tagSet,
+                platformSet, platformSet
             });
         });
     });

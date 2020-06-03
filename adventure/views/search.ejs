@@ -1,15 +1,24 @@
 ﻿<%- include("head", {title: "search"}) %>
-<h1>Search results for: <%= search %> </h1>
 <style>
 form.search {
 	border: 4px solid lightgrey;
 	padding: 10px;
 }
+form.search select {
+	width: 100% !important;
+}
 </style>
 <form class="search ">
 	<div class="row">
-		<div class="col-md-1 form-inline">
-			<label>Search:</label> &nbsp;
+		<div class="col-md-12">
+			<label>
+			<strong>Search Terms (<a href="/search-help" target="_blank">?</a>)</strong>
+			</label>
+		</div>
+	</div>
+	<div class="form-row">
+		<div class="col-md-2 form-inline">
+			<label>Text:</label> &nbsp;
 		</div>
 		<div class="col-md-3 form-inline">
 			<input type="text" class="form-control" name="q" placeholder="Search text" value="<%= search %>">
@@ -18,39 +27,43 @@ form.search {
 			<label>Released year:</label> &nbsp;
 		</div>
 		<div class="col-md-3 form-inline">
-			<input type="text" class="form-control" name="startYear" size="4" placeholder="From"> -
-			<input type="text" class="form-control" name="endYear" size="4" placeholder="To">
+			<input type="text" class="form-control" name="startYear" size="4" value="<%= startYear %>" placeholder="From">&nbsp;-&nbsp;
+			<input type="text" class="form-control" name="endYear" size="4" value="<%= endYear %>" placeholder="To">
 		</div>
-		<div class="col-md-3 text-right">
+		<div class="col-md-2 text-right">
 			<button type="submit" class="btn btn-primary">Search</button>
 		</div>
 	</div>
 	<div class="row" style="margin-top: 10px;">
-		<br>
+		<div class="col-md-2"></div>
+		<div class="col-md-3">
+			<label for="descField">Search Descriptions: </label> <input name="descField" type="checkbox">
+		</div>
 	</div>
 	<div class="row">
-		<div class="col-md-1 form-inline">
+		<div class="col-md-2 form-inline">
 			<label>Platform:</label> &nbsp;
 		</div>
-		<div class="col-md-3 form-inline">
-			<select multiple name="platforms" class="form-control">
-				<option>Windows</option>
-				<option>MacOS</option>
-				<option>DOS</option>
+		<div class="col-md-3">
+			<select multiple name="platforms" class="form-control multi-check">
+			    <% platforms.forEach(function(j, n, a) { %>
+					<option if <% if (platformSet.indexOf(j) > -1) { %> selected=true <% } %> ><%= j %></option>
+                <% }) %>
 			</select>
 		</div>
 		<div class="col-md-2 form-inline">
 			<label>Tags:</label> &nbsp;
 		</div>
-		<div class="col-md-3 form-inline">
-			<select multiple name="tags" class="form-control">
-				<option>Spreadsheet</option>
-				<option>Mathematics</option>
-				<option>Graphics</option>
+		<div class="col-md-3">
+			<select multiple name="tags" class="form-control multi-check">
+				<% tags.forEach(function(j, n, a) { %>
+					<option if <% if (tagSet.indexOf(j) > -1) { %> selected=true <% } %> ><%= j %></option>
+                <% }) %>
 			</select>
 		</div>
 	</div>
 </form>
+<br>
 
 <dl id="searchList">
     <% products.forEach(function(i, n, a) {%>
