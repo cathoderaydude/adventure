@@ -218,12 +218,14 @@ server.get("/search", function (req, res) {
 
 
     // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
-    // TODO: Once column sorting is implemented, 
+    // TODO: Once column sorting is implemented, will need to add ORDER BY clause
     var coreQuery = "MATCH(Products.Name) AGAINST (? IN BOOLEAN MODE) && \
     Products.Type LIKE ? && \
     IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && \
     IF(? LIKE '%', 'Platform' LIKE CONCAT(\"%\", ?, \"%\"), TRUE)";
 
+    // Matching logic for the subquery that checks for releases that fit the desired criteria
+    // TODO: Technically tagQuery doesn't belong here since it's in Products, but it's harmless here
     var releaseQuery = "AND Products.ProductUUID IN (\
         SELECT ProductUUID FROM Releases \
         WHERE \
@@ -233,8 +235,6 @@ server.get("/search", function (req, res) {
         AND ("+ platformQuery +") \
         AND ("+ tagQuery +") \
     )";
-
-    console.info(releaseQuery);
 
     // HACK: I am EXTREMELY not proud of ANY of these queries
     // they need UDFs and building on demand BADLY
@@ -253,6 +253,14 @@ server.get("/search", function (req, res) {
                 x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes));
                 return x;
             })
+
+            /* TODO: Right now search correctly filters on releases, but does not show those releases in the search
+            *  results. Template should be updated to link to each matching release under its corresponding product
+            *  and in order to do that we have to run a subquery for every row returned from the last query that will
+            *  retrieve the release information (version, year) and link there
+            */
+
+
             // TODO: Special-case OS for rendering the old custom layout
             res.render("search", {
                 search: searchTerm,
