@@ -1,0 +1,111 @@
+﻿<%- include("head", {title: download.Name}) %>
+<div class="row">
+    <div id="descriptionColumn" class="col-sm-9">
+        <h1>
+            <%= download.Name %>
+        </h1>
+        <% if (user && user.UserFlags.some(function (x) { return x.FlagName == "sa"; })) { %>
+        <div class="btn-group" role="group" aria-label="Admin actions">
+            <a class="btn btn-warning" role="button" href="/sa/download/<%= download.DLUUID %>">Edit download</a>
+        </div>
+        <% } %>
+        <% if (download.Information) { %>
+        <p><%= download.Information %></p>
+        <% } %>
+        <a href="/release/<%= download.ReleaseUUID %>" class="btn btn-outline-primary">Back to release</a>
+		<% if (mirrors.length > 0) { %>
+        <h2>Mirrors</h2>
+        <p>
+            You have used <%= usedDownloads %> of your current <%= downloadLimit %> downloads. This count will reset daily.
+        </p>
+        <p>
+            Having trouble with downloads? You may want to <a href="/download/test">check what the site and mirrors report</a> if they aren't working when reporting an issue.
+        </p>
+        <ul id="mirrorsList">
+            <% mirrors.forEach(function(i, n, a) {%>
+            <li><a href="/download/<%= download.DLUUID %>/from/<%= i.MirrorUUID %>"><%= i.MirrorName %></a> (<%= i.Location %>, <%= i.Country %>)</li>
+            <% }); %>
+        </ul>
+		<% } %>
+		<% if (download.IPFSPath) { %>
+		<h2>IPFS</h2>
+		<p>This file is also available over <a href="https://ipfs.io/">IPFS</a>. IPFS is a decentralised distributed file store, and thus downloads do not count towards your daily download limit.</p>
+
+		<p><i>Warning: IPFS support is currently experimental and your download might not work.</i></p>
+
+		<p id="localIPFSClientMessage">
+			No local IPFS client has been detected. To use the IPFS client, visit <a href="https://ipfs.io">ipfs.io</a> to install the IPFS Companion browser extention and download and run a client.<br />
+			
+		</p>
+
+		<p>Download through</p>
+		<ul>
+			<li><a href="https://cloudflare-ipfs.com<%=download.IPFSPath%>">Cloudflare IPFS Gateway</a></li>
+			<li id="localClientLink" style="display: none;">Local client: <a href="dweb:<%=download.IPFSPath%>"><%=download.IPFSPath%></a></li>
+		</ul>
+		<script>
+			(() => {
+				const localClientLink = document.getElementById('localClientLink')
+				const localIPFSClientMessage = document.getElementById('localIPFSClientMessage')
+
+				const getIpfs = () => new Promise((resolve, reject) => {
+					if (window.ipfs) {
+						if (window.ipfs.enable) {
+							return resolve(window.ipfs.enable({commands: ['id', 'version']}))
+						}
+						return resolve(window.ipfs);
+					}
+					reject();
+				})
+
+				const log = (msg) => {
+					console.log(msg)
+				}
+
+				const IPFSAvailable = (id) => {
+					log(`running ${id.agentVersion} with ID ${id.id}`)
+					localClientLink.style.display = ""
+					localIPFSClientMessage.style.display = "none"
+				}
+
+				getIpfs()
+					.then(ipfs => ipfs.id()
+					.then(id => IPFSAvailable(id)))
+					.catch(log)
+				
+			})()
+		</script>
+		<% }%>
+		<% if (mirrors.length > 0 != true && !download.IPFSPath) { %>
+		<p>The file doesn't have any mirrors or other methods to download associated with it.</p>
+		<% } %>
+    </div>
+    <div class="col-sm">
+        <div id="fileInfoSheet" class="card">
+            <div class="card-header" role="tab" id="fileInfoheader">
+                <h2 class="mb-0 h6">
+                    File Information
+                </h2>
+            </div>
+            <dl class="card-body" role="tabpanel" aria-labelledby="fileInfoheader">
+                <dt>Version</dt>
+                <dd>
+                    <%= download.Version %>
+                    <span class="downloadTagPrerelease badge badge-warning"><%= download.RTM == "True" ? "" : "Prerelease" %></span>
+                    <span class="downloadTagUpgrade badge badge-secondary"><%= download.Upgrade == "True" ? "Upgrade" : "" %></span>
+                </dd>
+                <dt>Language</dt>
+                <dd><%= download.Language %></dd>
+                <dt>Processor architecture</dt>
+                <dd><%= download.Arch %></dd>
+                <dt>File type</dt>
+                <dd><%= download.ImageType %></dd>
+                <dt>File size</dt>
+                <dd><%= download.FileSize %></dd>
+                <dt>Checksum</dt>
+                <dd><tt style="display:block;word-break:break-all"><%= download.FileHash || download.SHA1Sum.toString('hex') %></tt></dd>
+            </dl>
+         </div>
+     </div>
+</div>
+<%- include("foot") %>

@@ -1,0 +1,53 @@
+﻿<%- include("head", {title: "Editing user " + editingUser.ShortName}) %>
+<h1>Editing user <var><%= editingUser.ShortName  %></var></h1>
+<h2>Details</h2>
+<form>
+    <div class="form-group">
+        <label for="regDate">Registration date</label>
+        <input readonly type="text" class="form-control" id="regDate" name="regDate" placeholder="Registration date" value="<%= editingUser.RegistrationTime %>">
+    </div>
+</form>
+<h2>Change password</h2>
+<form method="post" action="/sa/user/changepw/<%= editingUser.UserID %>" class="mb-2">
+    <div class="form-group">
+        <label for="newPassword">New password</label>
+        <input type="password" class="form-control" id="newPassword" name="newPassword" placeholder="New password">
+    </div>
+    <div class="form-group">
+        <label for="newPasswordR">New password (repeat)</label>
+        <input type="password" class="form-control" id="newPasswordR" name="newPasswordR" placeholder="New password (repeat)">
+    </div>
+    <button type="submit" class="btn btn-primary">Submit</button>
+</form>
+<h2>Edit profile</h2>
+<form method="post" action="/sa/user/edit/<%= editingUser.UserID %>" class="mb-2">
+    <div class="form-check">
+        <label class="form-check-label">
+            <input class="form-check-input" name="enabled" type="checkbox" <%= editingUser.AccountEnabled == "True" ? "checked" : "" %>>
+            Account enabled
+        </label>
+    </div>
+    <div class="form-group">
+        <label for="email">Email address</label>
+        <input type="email" class="form-control" id="email" name="email" placeholder="Email address" value="<%= editingUser.Email %>">
+    </div>
+    <button type="submit" class="btn btn-primary">Submit</button>
+</form>
+<h2>Flags</h2>
+<ul>
+    <% editingUser.UserFlags.forEach(function (i, n, a) { %>
+    <li><%= i.LongName %> (<a href="/sa/user/removeFlag/<%= editingUser.UserID %>/<%= i.FlagName %>">Remove</a>)</li>
+    <% }); %>
+</ul>
+<form method="post" action="/sa/user/addFlag/<%= editingUser.UserID %>" class="form-inline">
+    <div class="form-group mb-2 mr-sm-2 mb-sm-0">
+        <label class="sr-only" for="newFlag">Add Flag</label>
+        <select required class="form-control" id="newFlag" name="flag">
+            <% userFlags.forEach(function (i, n, a) { %>
+            <option value="<%= i.FlagName %>"><%= i.LongName %></option>
+            <% }); %>
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Add Flag</button>
+</form>
+<%- include("foot") %>

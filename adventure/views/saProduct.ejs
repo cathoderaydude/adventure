@@ -1,0 +1,68 @@
+﻿<%- include("head", {title: "Editing " + product.Name}) %>
+<h1>Editing <%= product.Name %></h1>
+<h2>Basic metadata</h2>
+<form method="post" action="/sa/editProductMetadata/<%= product.ProductUUID %>">
+    <div class="row">
+        <div class="col form-group">
+            <label for="name">Name</label>
+            <input required type="text" class="form-control" id="name" name="name" placeholder="Name" value="<%= product.Name %>">
+        </div>
+        <div class="col form-group">
+            <label for="slug">Slug</label>
+            <input required type="text" class="form-control" id="slug" name="slug" placeholder="Slug" pattern="^[0-9A-Za-z-]+$" value="<%= product.Slug %>">
+            <small class="form-text text-muted">
+                Alphanumeric characters and hyphen only. This must be unique.
+            </small>
+        </div>
+    </div>
+    <div class="form-group">
+        <label for="notes">Notes</label>
+        <textarea rows="5" class="form-control" id="notes" name="notes"><%= product.Notes %></textarea>
+        <small class="form-text text-muted">
+            This field is formatted in Markdown
+        </small>
+    </div>
+    <div class="form-group">
+        <label for="defaultRelease">Default release</label>
+        <select class="form-control" id="defaultRelease" name="defaultRelease">
+            <option style="font-style: italic" value="" <%= product.DefaultRelease == null ? "selected" : "" %>>Default to earliest</option>
+            <% if (releases && releases.length > 0) { %>
+            <optgroup label="Releases">
+            <% releases.forEach(function(i, n, a) { %>
+            <option value="<%= i.ReleaseUUID %>" <%= product.DefaultRelease == i.ReleaseUUID ? "selected" : "" %>><%= i.Name %></option>
+            <% }) %>
+            </optgroup>
+            <% } %>
+        </select>
+    </div>
+    <div class="form-group">
+        <label for="type">Type</label>
+        <select required class="form-control" id="type" name="type">
+            <% for (var i in categoryMappingsInverted) { %>
+            <option <%= product.Type == i ? "selected" : "" %>><%= i %></option>
+            <% } %>
+        </select>
+    </div>
+    <% if (config.taggableCategories.some(function(x) { return x == product.Type})) { %>
+    <div class="form-group">
+        <label for="applicationTags">Tags</label>
+        <select multiple class="form-control" id="applicationTags" name="applicationTags">
+            <% Object.keys(tagMappingsInverted).forEach(function (i, n, a) { %>
+            <option <%= product.ApplicationTags && product.ApplicationTags.indexOf(i) > -1 ? "selected" : "" %>><%= i %></option>
+            <% }); %>
+        </select>
+    </div>
+    <% } %>
+    <button type="submit" class="btn btn-primary">Submit</button>
+    <a class="btn btn-outline-primary" href="/product/<%= product.Slug %>">Cancel</a>
+</form>
+<h2>Delete product</h2>
+This will delete the product. It will not delete releases associated to it. Are you sure you want to do this?
+<form method="get" action="/sa/deleteProduct/<%= product.ProductUUID %>" class="form-inline">
+    <div class="form-group mb-2 mr-sm-2 mb-sm-0">
+        <input class="form-check-input" name="yesPlease" id="saProductDeleteCheck" type="checkbox">
+        I want to delete this product
+    </div>
+    <button type="submit" id="saProductDeleteSubmit" class="btn btn-danger">Delete Product</button>
+</form>
+<%- include("foot") %>

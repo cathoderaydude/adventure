@@ -1,0 +1,38 @@
+{
+  "name": "adventure",
+  "version": "0.0.0",
+  "description": "WinWorld's open library system",
+  "main": "app.js",
+  "license": "AGPL-3.0-or-later",
+  "author": {
+    "name": "WinWorld",
+    "email": "winworldpc@outlook.com"
+  },
+  "contributors": [
+    {
+      "name": "Calvin Buckley",
+      "email": "calvin@cmpct.info"
+    }
+  ],
+  "repository": "https://github.com/WinWorldPC/adventure",
+  "bugs": "https://github.com/WinWorldPC/adventure/issues",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "body-parser": "^1.19.0",
+    "cookie-parser": "^1.4.4",
+    "ejs": "^2.6.2",
+    "express": "^4.17.1",
+    "express-session": "^1.16.2",
+    "flash": "^1.1.0",
+    "marked": "^0.6.3",
+    "morgan": "^1.9.1",
+    "multer": "^1.4.1",
+    "mysql2": "^1.6.5",
+    "nodemailer": "^4.7.0",
+    "nodemon": "^2.0.4",
+    "passport": "^0.4.0",
+    "passport-local": "^1.0.0",
+    "rss": "^1.2.2",
+    "svg-captcha": "^1.4.0"
+  }
+}

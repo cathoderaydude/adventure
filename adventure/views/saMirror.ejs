@@ -1,0 +1,64 @@
+﻿<%- include("head", {title: "Editing " + mirror.MirrorName}) %>
+<h1>Editing <%= mirror.MirrorName %></h1>
+<h2>Basic metadata</h2>
+<form method="post" action="/sa/editMirrorMetadata/<%= mirror.MirrorUUID %>">
+    <div class="row">
+        <div class="col form-group">
+            <label for="name">Name</label>
+            <input required type="text" class="form-control" id="name" name="name" placeholder="Name" value="<%= mirror.MirrorName %>">
+        </div>
+        <div class="col form-group">
+            <label for="slug">Hostname</label>
+            <input required type="text" class="form-control" id="hostname" name="hostname" placeholder="Hostname" value="<%= mirror.Hostname %>">
+        </div>
+    </div>
+    <div class="form-check">
+        <label class="form-check-label">
+            <input type="checkbox" class="form-check-input" id="online" name="online" <%= mirror.IsOnline == "True" ? "checked" : "" %> />
+            Mirror is online
+        </label>
+    </div>
+    <div class="row">
+        <div class="col form-group">
+            <label for="location">Location</label>
+            <input required type="text" class="form-control" id="location" name="location" placeholder="Location" value="<%= mirror.Location %>">
+        </div>
+        <div class="col form-group">
+            <label for="country">Country</label>
+            <select required class="form-control" id="country" name="country">
+                <option <%= mirror.Country == "FR" ? "selected" : "" %>>FR</option>
+                <option <%= mirror.Country == "UK" ? "selected" : "" %>>UK</option>
+                <option <%= mirror.Country == "US" ? "selected" : "" %>>US</option>
+                <option <%= mirror.Country == "JP" ? "selected" : "" %>>JP</option>
+                <option <%= mirror.Country == "EU" ? "selected" : "" %>>EU</option>
+                <option <%= mirror.Country == "CA" ? "selected" : "" %>>CA</option>
+            </select>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col form-group">
+            <label for="unixUser">System username</label>
+            <input type="text" class="form-control" id="unixUser" name="unixUser" placeholder="System username" value="<%= mirror.UnixUser %>">
+        </div>
+        <div class="col form-group">
+            <label for="homeDirectory">Home directory</label>
+            <input type="text" class="form-control" id="homeDirectory" name="homeDirectory" placeholder="Home directory" value="<%= mirror.HomeDirectory %>">
+        </div>
+        <div class="col form-group">
+            <label for="downloadDirectory">Download directory</label>
+            <input type="text" class="form-control" id="downloadDirectory" name="downloadDirectory" placeholder="Download directory" value="<%= mirror.DownloadDirectory %>">
+        </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Submit</button>
+    <a class="btn btn-outline-primary" href="/sa/mirrors">Cancel</a>
+</form>
+<h2>Delete mirror</h2>
+This will delete the mirror and any download presence information. It will not anything on the server itself. Are you sure you want to do this?
+<form method="get" action="/sa/deleteMirror/<%= mirror.MirrorUUID %>" class="form-inline">
+    <div class="form-group mb-2 mr-sm-2 mb-sm-0">
+        <input class="form-check-input" name="yesPlease" id="saMirrorDeleteCheck" type="checkbox">
+        I want to delete this mirror
+    </div>
+    <button type="submit" id="saMirrorDeleteSubmit" class="btn btn-danger">Delete Mirror</button>
+</form>
+<%- include("foot") %>
