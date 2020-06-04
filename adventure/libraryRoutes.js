@@ -214,19 +214,21 @@ server.get("/search", function (req, res) {
 
     // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
     // TODO: Once column sorting is implemented, will need to add ORDER BY clause
+    var detailsQuery = "AND year(Releases.ReleaseDate) >= '" + startYear + "' \n\
+            AND year(Releases.ReleaseDate) <= '" + endYear + "' \n\
+            AND ("+ platformQuery + ")\n\
+            AND Releases.VendorName LIKE ?\n";
+
     var coreQuery = "(MATCH(" + matchFields +") AGAINST (? IN BOOLEAN MODE) "+ftsEnabled+") \n\
         AND Products.ProductUUID IN (\n\
             SELECT ProductUUID FROM Releases \n\
             WHERE \n\
-            Releases.ProductUUID = Products.ProductUUID \n\
-            AND year(Releases.ReleaseDate) >= '" + startYear + "' \n\
-            AND year(Releases.ReleaseDate) <= '" + endYear + "' \n\
-            AND ("+ platformQuery + ")\n\
-            AND Releases.VendorName LIKE ?\n\
-        ) \n\
+            Releases.ProductUUID = Products.ProductUUID \n"
+            + detailsQuery +
+        ") \n\
         AND ("+ tagQuery +")";
 
-    console.log(coreQuery.split('\n'));
+    //console.log(coreQuery.split('\n'));
 
     // HACK: I am EXTREMELY not proud of ANY of these queries
     // they need UDFs and building on demand BADLY
@@ -241,53 +243,69 @@ server.get("/search", function (req, res) {
             }
         var count = cRes[0]["COUNT(*)"];
         var pages = Math.ceil(count / config.perPage);
-        // TODO: Display "no results" if there's no results
 
         // TODO: Break up these queries, BADLY
         // Now do the actual content query, limiting to the extents of the currently selected page
-            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID` From `Products` HAVING " + coreQuery + " LIMIT ?,?",
+            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`,HEX(Products.`ProductUUID`) AS PUID From `Products` HAVING " + coreQuery + " LIMIT ?,?",
                 [search, vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
                     var renderer = new marked.Renderer();
                     renderer.link = function (href, title, text) {
-                        return "<strong>"+text+"</strong>";
+                        return "<strong>" + text + "</strong>";
                     };
-                // truncate and markdown
-                var productsFormatted = prRes.map(function (x) {
-                    x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes), { renderer: renderer });
-                    return x;
-                })
+                    // truncate and markdown
+                    var productsFormatted = prRes.map(function (x) {
+                        x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes), { renderer: renderer });
+                        return x;
+                    })
 
-                /* TODO: Right now search correctly filters on releases, but does not show those releases in the search
-                *  results. Template should be updated to link to each matching release under its corresponding product
-                *  and in order to do that we have to run a subquery for every row returned from the last query that will
-                *  retrieve the release information (version, year) and link there
-                */
+                    var prodUUIDs = prRes.map(function (x) {
+                        return "0x" + x.PUID;
+                    });
 
-                
+                    // If there were no products returned, put in a bogus value, otherwise the next query will fail
+                    prodUUIDString = (prodUUIDs.length > 0) ? prodUUIDs.join(',') : "''";
 
-            // TODO: Special-case OS for rendering the old custom layout
-            res.render("search", {
-                search: searchTerm,
-                products: productsFormatted,
-                page: page,
-                pages: pages,
-                category: req.params.category,
-                tag: req.params.tag,
-                tags: tags,
-                tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
-                tags: Object.values(config.constants.tagMappings),
-                platformMappings: config.constants.platformMappings,
-                platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
-                platforms: Object.values(config.constants.platformMappings),
-                categoryMappings: config.constants.categoryMappings,
-                categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
-                startYear: startYear > 0000 ? startYear : "",
-                endYear: endYear < 9999 ? endYear : "",
-                tagSet: tagSet,
-                platformSet, platformSet,
-                vendor: (vendor == "%") ? "" : vendor,
-                descField: descField
-            });
+                    /* TODO: Right now search correctly filters on releases, but does not show those releases in the search
+                    *  results. Template should be updated to link to each matching release under its corresponding product
+                    *  and in order to do that we have to run a subquery for every row returned from the last query that will
+                    *  retrieve the release information (version, year) and link there
+                    */
+                    var releasesCollection = {};
+                    database.execute("SELECT *, HEX(ProductUUID) as PUID From `Releases` WHERE Releases.ProductUUID IN ("+ prodUUIDString +") " + detailsQuery,
+                        [vendor], function (relErr, relRes, relFields) {
+                            console.log(relRes.length);
+                            relRes.forEach(relRow => {
+                                PUID = relRow.PUID;
+                                if (!releasesCollection.hasOwnProperty(PUID)) releasesCollection[PUID] = [];
+                                releasesCollection[PUID].push(relRow);
+                                console.log(releasesCollection);
+                            });
+                            console.log("afteR");
+                            // TODO: Special-case OS for rendering the old custom layout
+                            res.render("search", {
+                                search: searchTerm,
+                                products: productsFormatted,
+                                page: page,
+                                pages: pages,
+                                category: req.params.category,
+                                tag: req.params.tag,
+                                tags: tags,
+                                tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
+                                tags: Object.values(config.constants.tagMappings),
+                                platformMappings: config.constants.platformMappings,
+                                platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
+                                platforms: Object.values(config.constants.platformMappings),
+                                categoryMappings: config.constants.categoryMappings,
+                                categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
+                                startYear: startYear > 0000 ? startYear : "",
+                                endYear: endYear < 9999 ? endYear : "",
+                                tagSet: tagSet,
+                                platformSet, platformSet,
+                                vendor: (vendor == "%") ? "" : vendor,
+                                descField: descField,
+                                releasesCollection: releasesCollection
+                            });
+                        });
         });
     });
 
