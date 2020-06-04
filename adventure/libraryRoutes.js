@@ -180,7 +180,6 @@ server.get("/search", function (req, res) {
         var platformQueries = [];
         platforms.forEach(platform => {
             // Make sure each platform is valid to prevent SQL injection
-            console.log("platform: " + platform);
             if (formatting.invertObject(config.constants.platformMappings).hasOwnProperty(platform)) {
                 platformQueries.push("find_in_set('" + platform + "', Releases.Platform)");
                 platformSet.push(platform);
@@ -201,7 +200,9 @@ server.get("/search", function (req, res) {
         endYear = Number(req.query.endYear);
     }
 
+    // Get "search description" checkbox
     var descField = (req.query.descField) ? true : false;
+    // Get vendor field
     var vendor = (req.query.vendor) ? req.query.vendor : "%";
 
     // Assemble the list of fields to be matched with fulltext search
@@ -209,16 +210,19 @@ server.get("/search", function (req, res) {
     if (descField) ftsMatchFields.push("Products.Notes");
     matchFields = ftsMatchFields.join(", ");
 
+    // If user entered no fulltext search value, crowbar out the fulltext search
     var ftsEnabled = "";
     if (searchTerm == "") ftsEnabled = "OR TRUE";
 
-    // This is the core matching logic, so it'll be identical in both the count/pagination query and the content query
-    // TODO: Once column sorting is implemented, will need to add ORDER BY clause
+    // We need to build the core part of the query so it'll be identical in both the count/pagination query, the content query, and the release aggregator query (in that order)
+
+    // First, the "details" (this goes into the core query and the release query)
     var detailsQuery = "AND year(Releases.ReleaseDate) >= '" + startYear + "' \n\
             AND year(Releases.ReleaseDate) <= '" + endYear + "' \n\
             AND ("+ platformQuery + ")\n\
             AND Releases.VendorName LIKE ?\n";
 
+    // Now the "core" which filters for which products match at all
     var coreQuery = "(MATCH(" + matchFields +") AGAINST (? IN BOOLEAN MODE) "+ftsEnabled+") \n\
         AND Products.ProductUUID IN (\n\
             SELECT ProductUUID FROM Releases \n\
@@ -228,12 +232,11 @@ server.get("/search", function (req, res) {
         ") \n\
         AND ("+ tagQuery +")";
 
-    //console.log(coreQuery.split('\n'));
-
     // HACK: I am EXTREMELY not proud of ANY of these queries
     // they need UDFs and building on demand BADLY
 
-    // First get count of matching columns so we can paginate
+    // Now let's start querying
+    // First get count of matching rows so we can paginate
     database.execute("SELECT COUNT(*) FROM `Products` WHERE " + coreQuery,
         [search, vendor], function (cErr, cRes, cFields) {
             if (!cRes) {
@@ -244,110 +247,74 @@ server.get("/search", function (req, res) {
         var count = cRes[0]["COUNT(*)"];
         var pages = Math.ceil(count / config.perPage);
 
-        // TODO: Break up these queries, BADLY
         // Now do the actual content query, limiting to the extents of the currently selected page
-            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`,HEX(Products.`ProductUUID`) AS PUID From `Products` HAVING " + coreQuery + " LIMIT ?,?",
-                [search, vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
-                    var renderer = new marked.Renderer();
-                    renderer.link = function (href, title, text) {
-                        return "<strong>" + text + "</strong>";
-                    };
-                    // truncate and markdown
-                    var productsFormatted = prRes.map(function (x) {
-                        x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes), { renderer: renderer });
-                        return x;
-                    })
+        // TODO: Once column sorting is implemented, will need to add ORDER BY clause here
+        database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`,HEX(Products.`ProductUUID`) AS PUID From `Products` HAVING " + coreQuery + " LIMIT ?,?",
+             [search, vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
 
-                    var prodUUIDs = prRes.map(function (x) {
-                        return "0x" + x.PUID;
-                    });
+                // This is used by the Markdown renderer to turn links into bold text
+                var renderer = new marked.Renderer();
+                renderer.link = function (href, title, text) {
+                    return "<strong>" + text + "</strong>";
+                };
+                // Now truncate and render markdown for the description field
+                var productsFormatted = prRes.map(function (x) {
+                    x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes), { renderer: renderer });
+                    return x;
+                })
 
-                    // If there were no products returned, put in a bogus value, otherwise the next query will fail
-                    prodUUIDString = (prodUUIDs.length > 0) ? prodUUIDs.join(',') : "''";
+                // Accumulate a list of all product UUIDs that matched
+                var prodUUIDs = prRes.map(function (x) {
+                    return "0x" + x.PUID;
+                });
 
-                    /* TODO: Right now search correctly filters on releases, but does not show those releases in the search
-                    *  results. Template should be updated to link to each matching release under its corresponding product
-                    *  and in order to do that we have to run a subquery for every row returned from the last query that will
-                    *  retrieve the release information (version, year) and link there
-                    */
-                    var releasesCollection = {};
-                    database.execute("SELECT *, HEX(ProductUUID) as PUID From `Releases` WHERE Releases.ProductUUID IN ("+ prodUUIDString +") " + detailsQuery,
-                        [vendor], function (relErr, relRes, relFields) {
-                            console.log(relRes.length);
-                            relRes.forEach(relRow => {
-                                PUID = relRow.PUID;
-                                if (!releasesCollection.hasOwnProperty(PUID)) releasesCollection[PUID] = [];
-                                releasesCollection[PUID].push(relRow);
-                                console.log(releasesCollection);
-                            });
-                            console.log("afteR");
-                            // TODO: Special-case OS for rendering the old custom layout
-                            res.render("search", {
-                                search: searchTerm,
-                                products: productsFormatted,
-                                page: page,
-                                pages: pages,
-                                category: req.params.category,
-                                tag: req.params.tag,
-                                tags: tags,
-                                tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
-                                tags: Object.values(config.constants.tagMappings),
-                                platformMappings: config.constants.platformMappings,
-                                platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
-                                platforms: Object.values(config.constants.platformMappings),
-                                categoryMappings: config.constants.categoryMappings,
-                                categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
-                                startYear: startYear > 0000 ? startYear : "",
-                                endYear: endYear < 9999 ? endYear : "",
-                                tagSet: tagSet,
-                                platformSet, platformSet,
-                                vendor: (vendor == "%") ? "" : vendor,
-                                descField: descField,
-                                releasesCollection: releasesCollection
-                            });
+                // If there were no products returned, put in a bogus value, otherwise the next query will fail
+                prodUUIDString = (prodUUIDs.length > 0) ? prodUUIDs.join(',') : "''";
+
+                // Now do another query which will get all releases for each of the matching products
+                // TODO: This might be refactorable as a JOIN against the previous query. I felt that was "dirty" since I'd have to manipulate the data a ton in JS, but now I'm thinking this is maybe dirtier. It does work, but it's probably slower than it needs to be.
+                var releasesCollection = {};
+                database.execute("SELECT *, HEX(ProductUUID) as PUID From `Releases` WHERE Releases.ProductUUID IN ("+ prodUUIDString +") " + detailsQuery,
+                    [vendor], function (relErr, relRes, relFields) {
+                        // Build a dict of all the releases for each ProductUUID
+                        relRes.forEach(relRow => {
+                            PUID = relRow.PUID;
+                            if (!releasesCollection.hasOwnProperty(PUID)) releasesCollection[PUID] = [];
+                            releasesCollection[PUID].push(relRow);
+                            console.log(releasesCollection);
                         });
+
+                        // Render the page
+                        // TODO: Special-case OS for rendering the old custom layout
+                        res.render("search", {
+                            search: searchTerm,
+                            products: productsFormatted,
+                            page: page,
+                            pages: pages,
+                            category: req.params.category,
+                            tag: req.params.tag,
+                            tags: tags,
+                            tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
+                            tags: Object.values(config.constants.tagMappings),
+                            platformMappings: config.constants.platformMappings,
+                            platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
+                            platforms: Object.values(config.constants.platformMappings),
+                            categoryMappings: config.constants.categoryMappings,
+                            categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
+                            startYear: startYear > 0000 ? startYear : "",
+                            endYear: endYear < 9999 ? endYear : "",
+                            tagSet: tagSet,
+                            platformSet, platformSet,
+                            vendor: (vendor == "%") ? "" : vendor,
+                            descField: descField,
+                            releasesCollection: releasesCollection
+                        });
+                    });
         });
     });
 
 
     return;
-
-
-
-
-
-
-    /*
-
-    // HACK: I am EXTREMELY not proud of ANY of these queries
-    // they need UDFs and building on demand BADLY
-    database.execute("SELECT COUNT(*)," + productPlatforms + " AS Platform FROM `Products` WHERE `Name` LIKE ? && `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', " + productPlatforms + " LIKE CONCAT(\"%\", ?, \"%\"), TRUE)", [search, category, tag, tag, platform, platform], function (cErr, cRes, cFields) {
-        var count = cRes[0]["COUNT(*)"];
-        var pages = Math.ceil(count / config.perPage);
-        // TODO: Break up these queries, BADLY
-        database.execute("SELECT `Name`,`Slug`,`ApplicationTags`,`Notes`,`Type`," + productPlatforms + " AS Platform FROM `Products` HAVING `Name` LIKE ? && `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', Platform LIKE CONCAT(\"%\", ?, \"%\"), TRUE) ORDER BY `Name` LIMIT ?,?", [search, category, tag, tag, platform, platform, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
-            // truncate and markdown
-            var productsFormatted = prRes.map(function (x) {
-                x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes));
-                return x;
-            })
-            // TODO: Special-case OS for rendering the old custom layout
-            res.render("search", {
-                search: searchTerm,
-                products: productsFormatted,
-                page: page,
-                pages: pages,
-                category: req.params.category,
-                tag: req.params.tag,
-                tags: tags,
-                tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
-                platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
-                categoryMappings: config.constants.categoryMappings,
-                categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings)
-            });
-        });
-    });
-    */
 });
 
 

@@ -92,9 +92,12 @@ form.search select {
             <%- i.Notes %>
         </dd>
 		<dd>
+			<ul class="nav justify-content-center">
 			<% releasesCollection[i.PUID].forEach(function(r,n,a) { %>
-				<a href="#"><%= r.Name %> </a> |
+				<li class="nav-link active"><a href="#"><%= r.Name %> </a> </li>
 			<% }) %>
+			</ul>
+			<hr>
 		</dd>
     <% }); %>
 </dl>
