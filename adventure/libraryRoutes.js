@@ -14,7 +14,7 @@ var server = express.Router();
 
 // Library routes
 function libraryRoute(req, res) {
-    var page = req.query.page || 1;
+    var page = Number(req.query.page) || 1;
     var category = "%"; // % for everything
     switch (req.params.category) {
         case "operating-systems":
@@ -43,7 +43,7 @@ function libraryRoute(req, res) {
     if (category == "OS" && config.specialCaseLibraryOS) {
         database.execute("SELECT `Name`,`Slug`," + productPlatforms + " AS Platform FROM `Products` WHERE `Type` LIKE 'OS' ORDER BY `Name`", [], function (prErr, prRes, prFields) {
             var products = prRes.map(function (x) {
-                x.Platform = x.Platform.split(",");
+                x.Platform = x.Platform ? x.Platform.split(",") : "";
                 return x;
             });
             
@@ -97,6 +97,11 @@ function libraryRoute(req, res) {
             var pages = Math.ceil(count / config.perPage);
             // TODO: Break up these queries, BADLY
             database.execute("SELECT `Name`,`Slug`,`ApplicationTags`,`Notes`,`Type`," + productPlatforms + " AS Platform FROM `Products` HAVING `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', Platform LIKE CONCAT(\"%\", ?, \"%\"), TRUE) ORDER BY `Name` LIMIT ?,?", [category, tag, tag, platform, platform, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
+                if (!prRes) {
+                    return res.status(404).render("error", {
+                        message: "Couldn't get the list of products."
+                    });
+                }
                 // truncate and markdown
                 var productsFormatted = prRes.map(function (x) {
                     x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes));
@@ -124,13 +129,228 @@ server.get("/library", function (req, res) {
     return res.redirect("/library/" + config.defaultCategory);
 });
 
-// TODO: non-CSE search
-server.get("/search", function (req, res) {
-    return res.render("searchCSE", {
-        q: req.query.q,
-        cx: config.cseId
+server.get("/search-help", function (req, res) {
+    return res.render("searchHelp", {
     });
 });
+
+server.get("/search", function (req, res) {
+    // TODO: Fold all this back into the main library display route so users can trivially move from displaying a whole category or tag to a more specific search; most of it's equivalent functionality anyway, we just need a flag to hide the search details field in the template (and the release details if/when that's implemented) - however, if the user clicks a link like "Advanced Search", their current view will be transformed into a search query
+
+    var page = req.query.page || 1;
+
+    /* ============================================================= */
+    // Assemble and sanitize search input 
+
+    // Is there a search term?
+    if (req.query.q) {
+        var searchTerm = req.query.q; // This is the search as it will be displayed in the results
+        var search = '%' + searchTerm + '%'; // This is the actual query we'll put in the SQL
+    } else {
+        // Blank searches are allowed so user can e.g. find all items by year
+        // TODO: Throw an error if NO fields were populated
+        var searchTerm = "";
+        var search = "%";
+    }
+
+    var tagQuery = "";
+    var tagSet = [];
+    // Are there any tags?
+    if (req.query.tags) {
+        // Convert input query to array if needed
+        if (Array.isArray(req.query.tags)) {
+            var tags = req.query.tags; // User selected multiple items
+        } else {
+            var tags = [req.query.tags]; // User selected one item
+        }
+        var tagQueries = [];
+        tags.forEach(tag => {
+            // Make sure each platform is valid to prevent SQL injection
+            if (formatting.invertObject(config.constants.tagMappings).hasOwnProperty(tag)) {
+                tagQueries.push("find_in_set('" + tag + "', Products.ApplicationTags)");
+                tagSet.push(tag);
+            }
+        });
+        tagQuery = tagQueries.join(" OR ");
+    }
+    if (tagQuery == "") tagQuery = "TRUE";
+
+    var platformQuery = "";
+    var platformSet = [];
+    // Are there any platforms?
+    if (req.query.platforms) {
+        // Convert input query to array if needed
+        if (Array.isArray(req.query.platforms)) {
+            var platforms = req.query.platforms; // User selected multiple items
+        } else {
+            var platforms = [req.query.platforms]; // User selected one item
+        }
+        var platformQueries = [];
+        platforms.forEach(platform => {
+            // Make sure each platform is valid to prevent SQL injection
+            if (formatting.invertObject(config.constants.platformMappings).hasOwnProperty(platform)) {
+                platformQueries.push("find_in_set('" + platform + "', Releases.Platform)");
+                platformSet.push(platform);
+            }
+        });
+        platformQuery = platformQueries.join(" OR ");
+    }
+    if (platformQuery == "") platformQuery = "TRUE";
+
+    var startYear = "0000";
+    // Is there a valid start year?
+    if (req.query.startYear && !isNaN(Number(req.query.startYear))) {
+        startYear = Math.floor(Number(req.query.startYear));
+    }
+    var endYear = "9999";
+    // Is there a valid end year?
+    if (req.query.endYear && !isNaN(Number(req.query.endYear))) {
+        endYear = Math.floor(Number(req.query.endYear));
+    }
+
+    // Get "search description" checkbox
+    var descField = (req.query.descField) ? true : false;
+    // Get vendor field
+    var vendor = (req.query.vendor) ? req.query.vendor : "%";
+
+    //http://localhost:3000/search/?q=LAN&startYear=1977&endYear=1980&descField=on&vendor=asd&platforms=DOS&platforms=CPM&tags=Word+Processor&tags=Utility
+
+    // Assemble the current set of GET parameters (after stripping invalid options) for linkbuilding (link and build bro link and build)
+    currentGET = "";
+    if (searchTerm != "") currentGET += "q=" + searchTerm;
+    if (vendor != "%") currentGET += "vendor=" + vendor;
+    if (endYear != 0000) currentGET += "&endYear=" + startYear;
+    if (endYear != 0000) currentGET += "&endYear=" + endYear;
+    if (descField) currentGET += "&descField=on";
+    if (platformSet.length > 0) currentGET += "&platforms=" + platformSet.join("&platforms=");
+    if (tagSet.length > 0) currentGET += "&tags=" + tagSet.join("&tags=");
+
+    /* ============================================================= */
+    // Begin the search 
+
+    // Assemble the list of fields to be matched with fulltext search
+    ftsMatchFields = ["Products.Name"];
+    if (descField) ftsMatchFields.push("Products.Notes");
+    matchFields = ftsMatchFields.join(", ");
+
+    // If user entered no fulltext search value, crowbar out the fulltext search
+    var ftsEnabled = "";
+    if (searchTerm == "") ftsEnabled = "OR TRUE";
+
+    // We need to build the core part of the query so it'll be identical in both the count/pagination query, the content query, and the release aggregator query (in that order)
+
+    /* Roughly the search logic goes like this (remember to update this for future changes):
+     * - First a fulltext search against titles and (if the user enables it) descriptions. These results are ranked by relevance.
+     * - Next, because fulltext search doesn't do leading wildcards, we OR results with a plaintext LIKE against title, so that "CAD" matches "AutoCAD"
+     * - Now do a subquery against Releases, and only match products if the release has:
+     * -- A matching begin/end year if present
+     * -- A matching platform if present
+     * -- A matching vendor name if present
+     * - And finally if there are any applicable tags, check those
+     */
+
+    // First, the "details" (this goes into the core query and the release query)
+    var detailsQuery = "AND year(Releases.ReleaseDate) >= '" + startYear + "' \n\
+            AND year(Releases.ReleaseDate) <= '" + endYear + "' \n\
+            AND ("+ platformQuery + ")\n\
+            AND Releases.VendorName LIKE ?\n";
+
+    // Now the "core" which filters for which products match at all
+    var coreQuery = "(MATCH(" + matchFields +") AGAINST (? IN NATURAL LANGUAGE MODE) "+ftsEnabled+" OR Products.Name LIKE ?) \n\
+        AND Products.ProductUUID IN (\n\
+            SELECT ProductUUID FROM Releases \n\
+            WHERE \n\
+            Releases.ProductUUID = Products.ProductUUID \n"
+            + detailsQuery +
+        ") \n\
+        AND ("+ tagQuery +")";
+
+    // HACK: I am EXTREMELY not proud of ANY of these queries
+    // they need UDFs and building on demand BADLY
+
+    // Now let's start querying
+    // First get count of matching rows so we can paginate
+    database.execute("SELECT COUNT(*) FROM `Products` WHERE " + coreQuery,
+        [search, '%' + search + '%', vendor], function (cErr, cRes, cFields) {
+            if (!cRes) {
+                return res.status(404).render("error", {
+                    message: "Search engine error."
+                });
+            }
+        var count = cRes[0]["COUNT(*)"];
+        var pages = Math.ceil(count / config.perPage);
+
+        // Now do the actual content query, limiting to the extents of the currently selected page
+        // TODO: Once column sorting is implemented, will need to add ORDER BY clause here
+            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`,HEX(Products.`ProductUUID`) AS PUID From `Products` HAVING " + coreQuery + " LIMIT ?,?",
+             [search, '%' + search + '%', vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
+
+                // This is used by the Markdown renderer to turn links into bold text
+                var renderer = new marked.Renderer();
+                renderer.link = function (href, title, text) {
+                    return "<em>" + text + "</em>";
+                };
+                // Now truncate and render markdown for the description field
+                var productsFormatted = prRes.map(function (x) {
+                    x.Notes = marked(formatting.truncateToFirstParagraph(x.Notes), { renderer: renderer });
+                    return x;
+                })
+
+
+                // Accumulate a list of all product UUIDs that matched
+                var prodUUIDs = prRes.map(function (x) {
+                    return "0x" + x.PUID;
+                });
+
+                // If there were no products returned, put in a bogus value, otherwise the next query will fail
+                prodUUIDString = (prodUUIDs.length > 0) ? prodUUIDs.join(',') : "''";
+
+                // Now do another query which will get all releases for each of the matching products
+                // TODO: This might be refactorable as a JOIN against the previous query. I felt that was "dirty" since I'd have to manipulate the data a ton in JS, but now I'm thinking this is maybe dirtier. It does work, but it's probably slower than it needs to be.
+                var releasesCollection = {};
+                database.execute("SELECT *, HEX(ProductUUID) as PUID From Releases WHERE Releases.ProductUUID IN ("+ prodUUIDString +") " + detailsQuery + " ORDER BY Releases.ReleaseDate, Releases.Name",
+                    [vendor], function (relErr, relRes, relFields) {
+                        // Build a dict of all the releases for each ProductUUID
+                        relRes.forEach(relRow => {
+                            PUID = relRow.PUID;
+                            if (!releasesCollection.hasOwnProperty(PUID)) releasesCollection[PUID] = [];
+                            releasesCollection[PUID].push(relRow);
+                        });
+
+                        // Render the page
+                        // TODO: Special-case OS for rendering the old custom layout
+                        res.render("search", {
+                            search: searchTerm,
+                            products: productsFormatted,
+                            page: page,
+                            pages: pages,
+                            category: req.params.category,
+                            tag: req.params.tag,
+                            tags: tags,
+                            tagMappingsInverted: formatting.invertObject(config.constants.tagMappings),
+                            tags: Object.values(config.constants.tagMappings),
+                            platformMappings: config.constants.platformMappings,
+                            platformMappingsInverted: formatting.invertObject(config.constants.platformMappings),
+                            platforms: Object.values(config.constants.platformMappings),
+                            categoryMappings: config.constants.categoryMappings,
+                            categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
+                            startYear: startYear > 0000 ? startYear : "",
+                            endYear: endYear < 9999 ? endYear : "",
+                            tagSet: tagSet,
+                            platformSet, platformSet,
+                            vendor: (vendor == "%") ? "" : vendor,
+                            descField: descField,
+                            releasesCollection: releasesCollection,
+                            currentGET: currentGET
+                        });
+                    });
+        });
+    });
+
+
+    return;
+});
+
 
 // TODO: Experimental view; VIPs only for now now that auth works
 function filesRoute(req, res) {
@@ -289,6 +509,27 @@ server.get("/product/:product/:release", function (req, res) {
                             ssoString = b64Object + " " + sign + " " + ts + " hmacsha1";
                         }
 
+                        // for OpenGraph
+                        var opengraph = {
+                            "og:title": product.Name + " " + release.Name,
+                            "og:site_name": config.name,
+                            // XXX: Product, article, or something else?
+                            "og:type": "product",
+                            // XXX: Slugs or ReleaseUUID?
+                            "og:url": config.publicBaseUrl + "product/" + product.Slug + "/" + release.Slug,
+                            // this gets escaped for us
+                            "og:description": formatting.stripTags(marked(formatting.truncateToFirstParagraph(product.Notes).replace(/\r?\n.*/g, "")))
+                        };
+
+                        // if we have a screenshot, use it, else resort to favicon
+                        if (screenshots.length > 0) {
+                            // there might be a leading slash that we shouldn't have
+                            var screenshotFile = screenshots[0].ScreenshotFile.replace(/^\//, "");
+                            opengraph["og:image"] = config.publicBaseUrl + screenshotFile;
+                        } else {
+                            opengraph["og:image"] = config.publicBaseUrl + "res/img/favicon.ico";
+                        }
+
                         res.render("release", {
                             product: product,
                             releases: rlRes,
@@ -302,12 +543,51 @@ server.get("/product/:product/:release", function (req, res) {
                             categoryMappings: config.constants.categoryMappings,
                             categoryMappingsInverted: formatting.invertObject(config.constants.categoryMappings),
 
-                            ssoString: ssoString
+                            ssoString: ssoString,
+                            opengraph: opengraph
                         });
                     });
                 });
             });
         });
+    });
+});
+
+server.get("/screenshot/:release", function (req, res) {
+    var uuid = req.params.release;
+    var uuidAsBuf = formatting.hexToBin(uuid);
+    database.execute("SELECT p.Name as `ProductName`, r.Name as `ReleaseName` FROM Releases r INNER JOIN Products p on p.ProductUUID = r.ProductUUID WHERE r.ReleaseUUID = ?", [uuidAsBuf], function (relErr, relRes, relFields) {
+        if (relErr || relRes == null) {
+            return res.status(404).render("error", {
+                message: "There was no release."
+            });
+        } else {
+            database.execute("SELECT * FROM `Screenshots` WHERE `ReleaseUUID` = ?", [uuidAsBuf], function (scErr, scRes, scFields) {
+                if (scErr || scRes == null || scRes.length == 0) {
+                    return res.status(404).render("error", {
+                        message: "There was are no screenshots."
+                    });
+                } else {
+                    var screenshots = scRes.map(screenshot => {
+                        screenshot.ScreenshotFile = config.screenshotBaseUrl + screenshot.ScreenshotFile;
+                        screenshot.ScreenshotUUID = formatting.binToHex(screenshot.ScreenshotUUID);
+                        return screenshot;
+                    });
+                    // chunk the array (mutates, but we don't care)
+                    var chunked = [];
+                    while (screenshots.length) {
+                            chunked.push(screenshots.splice(0, 4));
+                    }
+                    res.render("screenshotGallery", {
+                        rows: chunked,
+                        release: req.params.release,
+        
+                        releaseName: relRes[0].ReleaseName,
+                        productName: relRes[0].ProductName
+                    });
+                }
+            });
+        }
     });
 });
 
