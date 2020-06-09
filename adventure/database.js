@@ -4,7 +4,12 @@
 var pool = null;
 
 module.exports = {
+    logQueries: false,
+
     createConnection: function (params) {
+        if (params.logQueries) {
+            this.logQueries = true;
+        }
         pool = mysql.createPool(params);
     },
     
@@ -23,6 +28,9 @@ module.exports = {
             }
             if (args.length > 2) {
                 sql_args = args[1];
+            }
+            if (this.logQueries) {
+                console.log(connection.format(args[0], sql_args));
             }
             connection.execute(args[0], sql_args, function (err, results, fields) {
                 connection.release(); // always put connection back in pool after last query

@@ -55,6 +55,40 @@
     <% } %>
     <button type="submit" class="btn btn-primary">Submit</button>
     <a class="btn btn-outline-primary" href="/product/<%= product.Slug %>">Cancel</a>
+</form >
+    <br>
+    <h3>Add an icon</h3>
+<form method="post" action="/sa/addIcon/<%= product.ProductUUID %>" enctype="multipart/form-data" class="form">
+        <div class="row">
+        <div class="form-group col">
+            <label for="iconFile">File</label>
+            <input type="file" class="form-control-file" id="iconFile" name="iconFile" onchange="iconReadURL(this)">
+        </div>
+                <div class="col-2">
+                    <div id="preseticons" class="iconbox">
+                            <div class="icon-wrapper">
+                                <small>Current</small>
+                                <img class="preset-icon" src="/res/img/<%= product.LogoImage %>">
+                            </div>
+                            <div class="icon-wrapper">
+                                <small>New</small>
+                                <img id="new-icon" class="preset-icon">
+                            </div>
+                    </div>
+                </div>
+        <div class="form-group col-6">
+                <div id="preseticons" class="iconbox">
+                    <% presetIcons.forEach(function(e,i,a) { %>
+                        <div class="icon-wrapper">
+                            <small><%= e[0] %></small>
+                            <img class="preset-icon" data-preset-name="<%= e[0] %>" src="<%= e[1] %>">
+                        </div>
+                        <% }) %>
+                        <input type="hidden" id="presetName" name="presetName">    
+                    </div>
+                </div>
+        </div>
+            <button type="submit" class="btn btn-primary">Add Icon</button>
 </form>
 <h2>Delete product</h2>
 This will delete the product. It will not delete releases associated to it. Are you sure you want to do this?

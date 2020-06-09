@@ -4,7 +4,8 @@
     marked = require("marked"),
     rss = require("rss"),
     middleware = require("./middleware.js"),
-    formatting = require("./formatting.js");
+    formatting = require("./formatting.js"),
+    fs = require("fs");
 
 var config, database, sitePages;
 
@@ -38,10 +39,8 @@ function libraryRoute(req, res) {
             });
     }
     
-    const productPlatforms = "(SELECT GROUP_CONCAT(DISTINCT Platform) FROM Releases WHERE ProductUUID = Products.ProductUUID)";
-    
     if (category == "OS" && config.specialCaseLibraryOS) {
-        database.execute("SELECT `Name`,`Slug`," + productPlatforms + " AS Platform FROM `Products` WHERE `Type` LIKE 'OS' ORDER BY `Name`", [], function (prErr, prRes, prFields) {
+        database.execute("SELECT `Name`,`Slug`, ProductPlatforms(`ProductUUID`) AS Platform FROM `Products` WHERE `Type` LIKE 'OS' ORDER BY `Name`", [], function (prErr, prRes, prFields) {
             var products = prRes.map(function (x) {
                 x.Platform = x.Platform ? x.Platform.split(",") : "";
                 return x;
@@ -92,11 +91,11 @@ function libraryRoute(req, res) {
         }
         // HACK: I am EXTREMELY not proud of ANY of these queries
         // they need UDFs and building on demand BADLY
-        database.execute("SELECT COUNT(*)," + productPlatforms + " AS Platform FROM `Products` WHERE `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', " + productPlatforms + " LIKE CONCAT(\"%\", ?, \"%\"), TRUE)", [category, tag, tag, platform, platform], function (cErr, cRes, cFields) {
+        database.execute("SELECT COUNT(*), ProductPlatforms(`ProductUUID`) AS Platform FROM `Products` WHERE `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', ProductPlatforms(`ProductUUID`) LIKE CONCAT(\"%\", ?, \"%\"), TRUE)", [category, tag, tag, platform, platform], function (cErr, cRes, cFields) {
             var count = cRes[0]["COUNT(*)"];
             var pages = Math.ceil(count / config.perPage);
             // TODO: Break up these queries, BADLY
-            database.execute("SELECT `Name`,`Slug`,`ApplicationTags`,`Notes`,`Type`," + productPlatforms + " AS Platform FROM `Products` HAVING `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', Platform LIKE CONCAT(\"%\", ?, \"%\"), TRUE) ORDER BY `Name` LIMIT ?,?", [category, tag, tag, platform, platform, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
+            database.execute("SELECT `Name`,`Slug`,`ApplicationTags`,`Notes`,`Type`, ProductPlatforms(`ProductUUID`) AS Platform FROM `Products` HAVING `Type` LIKE ? && IF(? LIKE '%', ApplicationTags LIKE CONCAT(\"%\", ?, \"%\"), TRUE) && IF(? LIKE '%', Platform LIKE CONCAT(\"%\", ?, \"%\"), TRUE) ORDER BY `Name` LIMIT ?,?", [category, tag, tag, platform, platform, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
                 if (!prRes) {
                     return res.status(404).render("error", {
                         message: "Couldn't get the list of products."
@@ -153,6 +152,54 @@ server.get("/search", function (req, res) {
         var search = "%";
     }
 
+    // build! that! sort! query!
+    var sortOrder = (req.query.sort) ? req.query.sort : "alpha-az";
+    var firstLetter = searchTerm.toLowerCase().charAt(0);
+    switch (sortOrder) {
+        case "relevance":
+            sortQuery = " ORDER BY case when lower(left(Products.Name, 1)) = '" + firstLetter + "' then 1 else 2 end,Products.Name ";
+            break;
+        case "alpha-az":
+            sortQuery = " ORDER BY Products.Name ASC ";
+            break;
+        case "alpha-za":
+            sortQuery = " ORDER BY Products.Name DESC ";
+            break;
+        case "most-dled":
+            sortQuery = " ORDER BY ProductDownloadCount(Products.ProductUUID) DESC ";
+            break;
+        case "least-dled":
+            sortQuery = " ORDER BY ProductDownloadCount(Products.ProductUUID) ASC ";
+            break;
+        case "earliest-initial":
+            sortQuery = " ORDER BY CASE WHEN StartYear <> -9000 THEN 1 ELSE 2 END, StartYear ASC ";
+            break;
+        case "latest-initial":
+            sortQuery = " ORDER BY CASE WHEN StartYear <> -9000 THEN 1 ELSE 2 END, StartYear DESC ";
+            break;
+        case "most-recent":
+            sortQuery = " ORDER BY CASE WHEN EndYear <> -9000 THEN 1 ELSE 2 END, EndYear ASC ";
+            break;
+        case "least-recent":
+            sortQuery = " ORDER BY CASE WHEN EndYear <> -9000 THEN 1 ELSE 2 END, EndYear DESC ";
+            break;
+        default:
+            sortQuery = " ORDER BY case when lower(left(Products.Name, 1)) = '" + firstLetter + "' then 1 else 2 end,Products.Name";
+    }
+
+    // Array of all possible sort methods (a secret tool we'll need later)
+    sortOptions = [
+        ["relevance", "Relevance"],
+        ["alpha-az", "Alphabetical A-z"],
+        ["alpha-za", "Alphabetical Z-a"],
+        ["most-dled", "Most downloaded"],
+        ["least-dled", "Least downloaded"],
+        ["earliest-initial", "Earliest initial release"],
+        ["latest-initial", "Latest initial release"],
+        ["most-recent", "Most recently updated"],
+        ["least-recent", "Least recently updated"]
+    ];
+
     var tagQuery = "";
     var tagSet = [];
     // Are there any tags?
@@ -165,7 +212,7 @@ server.get("/search", function (req, res) {
         }
         var tagQueries = [];
         tags.forEach(tag => {
-            // Make sure each platform is valid to prevent SQL injection
+            // Make sure each tag is valid to prevent SQL injection
             if (formatting.invertObject(config.constants.tagMappings).hasOwnProperty(tag)) {
                 tagQueries.push("find_in_set('" + tag + "', Products.ApplicationTags)");
                 tagSet.push(tag);
@@ -197,6 +244,28 @@ server.get("/search", function (req, res) {
     }
     if (platformQuery == "") platformQuery = "TRUE";
 
+    var categoryQuery = "";
+    var categorySet = [];
+    // Are there any categories?
+    if (req.query.category) {
+        // Convert input query to array if needed
+        if (Array.isArray(req.query.categorys)) {
+            var categorys = req.query.category; // User selected multiple items
+        } else {
+            var categorys = [req.query.category]; // User selected one item
+        }
+        var categoryQueries = [];
+        categorys.forEach(category => {
+            // Make sure each category is valid to prevent SQL injection
+            if (formatting.invertObject(config.constants.categoryMappings).hasOwnProperty(category)) {
+                categoryQueries.push("find_in_set('" + category + "', Products.Type)");
+                categorySet.push(category);
+            }
+        });
+        categoryQuery = categoryQueries.join(" OR ");
+    }
+    if (categoryQuery == "") categoryQuery = "TRUE";
+
     var startYear = "0000";
     // Is there a valid start year?
     if (req.query.startYear && !isNaN(Number(req.query.startYear))) {
@@ -213,40 +282,34 @@ server.get("/search", function (req, res) {
     // Get vendor field
     var vendor = (req.query.vendor) ? req.query.vendor : "%";
 
-    //http://localhost:3000/search/?q=LAN&startYear=1977&endYear=1980&descField=on&vendor=asd&platforms=DOS&platforms=CPM&tags=Word+Processor&tags=Utility
+    var showForm = req.query.showForm ? true : false;
 
     // Assemble the current set of GET parameters (after stripping invalid options) for linkbuilding (link and build bro link and build)
     currentGET = "";
     if (searchTerm != "") currentGET += "q=" + searchTerm;
     if (vendor != "%") currentGET += "vendor=" + vendor;
-    if (endYear != 0000) currentGET += "&endYear=" + startYear;
-    if (endYear != 0000) currentGET += "&endYear=" + endYear;
+    if (startYear != "0000") currentGET += "&startYear=" + startYear;
+    if (endYear != "9999") currentGET += "&endYear=" + endYear;
     if (descField) currentGET += "&descField=on";
     if (platformSet.length > 0) currentGET += "&platforms=" + platformSet.join("&platforms=");
     if (tagSet.length > 0) currentGET += "&tags=" + tagSet.join("&tags=");
+    if (categorySet.length > 0) currentGET += "&category=" + tagSet.join("&category=");
+    if (sortOrder != "alpha-az") currentGET += "&sort=" + sortOrder;
+    if (showForm) currentGET += "&showForm=true";
 
     /* ============================================================= */
     // Begin the search 
 
-    // Assemble the list of fields to be matched with fulltext search
-    ftsMatchFields = ["Products.Name"];
-    if (descField) ftsMatchFields.push("Products.Notes");
-    matchFields = ftsMatchFields.join(", ");
-
-    // If user entered no fulltext search value, crowbar out the fulltext search
-    var ftsEnabled = "";
-    if (searchTerm == "") ftsEnabled = "OR TRUE";
-
     // We need to build the core part of the query so it'll be identical in both the count/pagination query, the content query, and the release aggregator query (in that order)
 
     /* Roughly the search logic goes like this (remember to update this for future changes):
-     * - First a fulltext search against titles and (if the user enables it) descriptions. These results are ranked by relevance.
-     * - Next, because fulltext search doesn't do leading wildcards, we OR results with a plaintext LIKE against title, so that "CAD" matches "AutoCAD"
+     * - First a plain LIKE search against titles and (if the user enables it) descriptions.
      * - Now do a subquery against Releases, and only match products if the release has:
      * -- A matching begin/end year if present
      * -- A matching platform if present
      * -- A matching vendor name if present
      * - And finally if there are any applicable tags, check those
+     * - Sort by whatever the user selected
      */
 
     // First, the "details" (this goes into the core query and the release query)
@@ -256,14 +319,15 @@ server.get("/search", function (req, res) {
             AND Releases.VendorName LIKE ?\n";
 
     // Now the "core" which filters for which products match at all
-    var coreQuery = "(MATCH(" + matchFields +") AGAINST (? IN NATURAL LANGUAGE MODE) "+ftsEnabled+" OR Products.Name LIKE ?) \n\
+    var coreQuery = "Products.Name LIKE ? \n\
         AND Products.ProductUUID IN (\n\
             SELECT ProductUUID FROM Releases \n\
             WHERE \n\
             Releases.ProductUUID = Products.ProductUUID \n"
             + detailsQuery +
         ") \n\
-        AND ("+ tagQuery +")";
+        AND ("+ tagQuery + ")\n\
+        AND ("+ categoryQuery +")";
 
     // HACK: I am EXTREMELY not proud of ANY of these queries
     // they need UDFs and building on demand BADLY
@@ -271,7 +335,7 @@ server.get("/search", function (req, res) {
     // Now let's start querying
     // First get count of matching rows so we can paginate
     database.execute("SELECT COUNT(*) FROM `Products` WHERE " + coreQuery,
-        [search, '%' + search + '%', vendor], function (cErr, cRes, cFields) {
+        [search, vendor], function (cErr, cRes, cFields) {
             if (!cRes) {
                 return res.status(404).render("error", {
                     message: "Search engine error."
@@ -282,8 +346,18 @@ server.get("/search", function (req, res) {
 
         // Now do the actual content query, limiting to the extents of the currently selected page
         // TODO: Once column sorting is implemented, will need to add ORDER BY clause here
-            database.execute("SELECT Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,Products.`Type`,Products.`ProductUUID`,HEX(Products.`ProductUUID`) AS PUID From `Products` HAVING " + coreQuery + " LIMIT ?,?",
-             [search, '%' + search + '%', vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
+            database.execute("SELECT \
+Products.`Name`,Products.`Slug`,Products.`ApplicationTags`,Products.`Notes`,\
+Products.`Type`,Products.`ProductUUID`,Products.`LogoImage`, \
+HEX(Products.`ProductUUID`) AS PUID, \
+ProductDownloadCount(Products.ProductUUID) as \"Hits\", \
+COALESCE((SELECT MIN(YEAR(ReleaseDate)) FROM `Releases` WHERE Releases.ProductUUID = Products.ProductUUID AND YEAR(Releases.ReleaseDate) > 0), -9000) AS StartYear, \
+COALESCE((SELECT MAX(YEAR(ReleaseDate)) FROM `Releases` WHERE Releases.ProductUUID = Products.ProductUUID AND YEAR(Releases.ReleaseDate) > 0), -9000) AS EndYear, \
+ProductPlatforms(Products.ProductUUID) AS Platform \
+From `Products` \
+HAVING " + coreQuery + sortQuery + " \
+LIMIT ?,?",
+             [search, vendor, (page - 1) * config.perPage, config.perPage], function (prErr, prRes, prFields) {
 
                 // This is used by the Markdown renderer to turn links into bold text
                 var renderer = new marked.Renderer();
@@ -305,6 +379,8 @@ server.get("/search", function (req, res) {
                 // If there were no products returned, put in a bogus value, otherwise the next query will fail
                 prodUUIDString = (prodUUIDs.length > 0) ? prodUUIDs.join(',') : "''";
 
+                
+
                 // Now do another query which will get all releases for each of the matching products
                 // TODO: This might be refactorable as a JOIN against the previous query. I felt that was "dirty" since I'd have to manipulate the data a ton in JS, but now I'm thinking this is maybe dirtier. It does work, but it's probably slower than it needs to be.
                 var releasesCollection = {};
@@ -315,6 +391,56 @@ server.get("/search", function (req, res) {
                             PUID = relRow.PUID;
                             if (!releasesCollection.hasOwnProperty(PUID)) releasesCollection[PUID] = [];
                             releasesCollection[PUID].push(relRow);
+                        });
+
+                        // Decide on an icon for each row
+                        var knownIcons = {}; // Cache icon lookups so we don't hit the FS unnecessarily
+                        prRes.forEach(resRow => {
+                            /*once again because i don't think they heard it all the way out in bushnell:
+                             * Icons are derived as follows:
+                             * - if there is an icon in /res/img/appicons/<release id in hex>.png use it
+                             * - if there are any tags, use the first one at /res/img/icons/tag-whatever.png
+                             * - if all else fails, pick one based on category, which is guaranteed
+                             */
+                            // Check for extant product file
+                            if (resRow.LogoImage) {
+                                var iconPath = path.join(config.resDirectory, "img", resRow.LogoImage);
+                            }
+                            if (fs.existsSync(iconPath)) {
+                                resRow.Icon = config.iconBaseUrl + "/" + resRow.LogoImage;
+                            } else if (resRow.ApplicationTags) {
+                                // Check for a tag we can use
+                                var firstTag = formatting.invertObject(config.constants.tagMappings)[resRow.ApplicationTags.split(',')[0]];
+                                iconPath = resRow.Icon = path.join(config.resDirectory, "img", "preset-icons", firstTag + ".png");
+                                resRow.Icon = config.iconBaseUrl + "preset-icons/" + firstTag + ".png";
+                            /*} else if (resRow.Platform.split(',').length == 1) {
+                                // If there's only a single platform we can pick a platform icon
+                                var platformName = resRow.Platform.split(',')[0]
+                                platformIcons = {
+                                    "Windows": "platform-windows.png",
+                                    "DOS": "platform-dos.png"
+                                };
+                                var platformIcon = platformIcons.hasOwnProperty(platformName) ? platformIcons[platformName] : "EXPLORER_108.gif";
+                                resRow.Icon = path.join(config.resDirectory, "img", "preset-icons", platformIcon);*/
+                            } else {
+                                // Nothing succeeded so fall back to a category
+                                resRow.Icon = config.iconBaseUrl + "/preset-icons/cat-" + formatting.invertObject(config.constants.categoryMappings)[resRow.Type] + ".png";
+                                iconPath = path.join(config.resDirectory, "img", "preset-icons", "cat-" + formatting.invertObject(config.constants.categoryMappings)[resRow.Type] + ".png")
+                                /* Nothing succeeded so fall back to a plain icon based on age
+                                if (resRow.startYear > 1995) {
+                                    resRow.Icon = path.join(config.resDirectory, "img", "preset-icons", "gui.png");
+                                } else {
+                                    resRow.Icon = path.join(config.resDirectory, "img", "preset-icons", "cli.png");
+                                }*/
+                            }
+
+                            if (!knownIcons.hasOwnProperty(resRow.Icon)) {
+                                knownIcons[resRow.Icon] = fs.existsSync(iconPath);
+                            }
+
+                            if (knownIcons[resRow.Icon] != true) {
+                                resRow.Icon = path.join(config.resDirectory, "img", "preset-icons", "gui.png");
+                            }
                         });
 
                         // Render the page
@@ -341,7 +467,11 @@ server.get("/search", function (req, res) {
                             vendor: (vendor == "%") ? "" : vendor,
                             descField: descField,
                             releasesCollection: releasesCollection,
-                            currentGET: currentGET
+                            currentGET: currentGET,
+                            resultCount: count,
+                            sort: sortOrder,
+                            sortOptions: sortOptions,
+                            showForm: showForm
                         });
                     });
         });
@@ -425,7 +555,7 @@ server.get("/product/:product", function (req, res) {
 });
 
 server.get("/product/:product/:release", function (req, res) {
-    database.execute("SELECT * FROM `Products` WHERE `Slug` = ?", [req.params.product], function (prErr, prRes, prFields) {
+    database.execute("SELECT *, ProductDownloadCount(ProductUUID) as `DownloadCount` FROM `Products` WHERE `Slug` = ?", [req.params.product], function (prErr, prRes, prFields) {
         var product = prRes[0] || null;
         if (product == null) {
             if (req.user && req.user.UserFlags.some(function (x) { return x.FlagName == "sa"; })) {
@@ -438,7 +568,7 @@ server.get("/product/:product/:release", function (req, res) {
             }
         }
         
-        database.execute("SELECT * FROM `Releases` WHERE `ProductUUID` = ? ORDER BY `ReleaseDate`", [product.ProductUUID], function (rlErr, rlRes, rlFields) {
+        database.execute("SELECT *, ReleaseDownloadCount(ReleaseUUID) as `DownloadCount` FROM `Releases` WHERE `ProductUUID` = ? ORDER BY `ReleaseDate`", [product.ProductUUID], function (rlErr, rlRes, rlFields) {
             if (rlRes == null || rlRes.length == 0) {
                 if (req.user && req.user.UserFlags.some(function (x) { return x.FlagName == "sa"; })) {
                     req.flash("warning", "The product has no releases. You can create one now.");
@@ -465,7 +595,7 @@ server.get("/product/:product/:release", function (req, res) {
             }
             database.execute("SELECT * FROM `Serials` WHERE `ReleaseUUID` = ?", [release.ReleaseUUID], function (seErr, seRes, seFields) {
                 database.execute("SELECT * FROM `Screenshots` WHERE `ReleaseUUID` = ?", [release.ReleaseUUID], function (scErr, scRes, scFields) {
-                    database.execute("SELECT * FROM `Downloads` WHERE `ReleaseUUID` = ? ORDER BY `Name`", [release.ReleaseUUID], function (dlErr, dlRes, dlFields) {
+                    database.execute("SELECT *, DownloadDownloadCount(DLUUID) as `DownloadCount` FROM `Downloads` WHERE `ReleaseUUID` = ? ORDER BY `Name`", [release.ReleaseUUID], function (dlErr, dlRes, dlFields) {
                         release.InstallInstructions = marked(release.InstallInstructions || "");
                         release.Notes = marked(release.Notes || "");
                         product.Notes = marked(product.Notes || "");
@@ -476,6 +606,7 @@ server.get("/product/:product/:release", function (req, res) {
                         release.DiskSpaceRequired = formatting.formatBytes(release.DiskSpaceRequired);
                         var downloads = dlRes.map(function (x) {
                             x.FileSize = formatting.formatBytes(x.FileSize);
+                            x.ImageTypeName = x.ImageType;
                             x.ImageType = config.constants.fileTypeMappings[x.ImageType];
                             x.DLUUID = formatting.binToHex(x.DLUUID);
                             return x;
@@ -703,7 +834,7 @@ server.get("/download/:download", function (req, res) {
         });
     }
     var uuidAsBuf = formatting.hexToBin(req.params.download);
-    database.execute("SELECT * FROM `Downloads` WHERE `DLUUID` = ?", [uuidAsBuf], function (dlErr, dlRes, dlFields) {
+    database.execute("SELECT *, DownloadDownloadCount(DLUUID) as `DownloadCount` FROM `Downloads` WHERE `DLUUID` = ?", [uuidAsBuf], function (dlErr, dlRes, dlFields) {
         var download = dlRes[0] || null;
         if (dlErr || download == null) {
             console.log(dlErr || "[ERR] download was null! /download/" + req.params.download + " refererr: " + req.get("Referrer"));
